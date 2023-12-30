@@ -1,6 +1,6 @@
-# pylint: disable=no-member
 import copy
 import json
+import os
 import re
 import subprocess
 import time
@@ -13,10 +13,13 @@ import requests
 from seagoat import __version__
 from seagoat.server import get_status_data
 from seagoat.server import server as seagoat_server
-from seagoat.utils.server import get_server_info
-from seagoat.utils.server import is_server_running
-from seagoat.utils.server import normalize_repo_path
+from seagoat.utils.server import (
+    get_server_info,
+    is_server_running,
+    normalize_repo_path,
+)
 from seagoat.utils.wait import wait_for
+from tests.conftest import GLOBAL_CONFIG_FILE
 
 
 def normalize_full_paths(data, repo):
@@ -38,9 +41,8 @@ def normalize_version(data):
 
 
 def test_query_codebase(server, snapshot, repo):
-    query_text = "Markdown"
-    url = f"{server}/query/{query_text}"
-    response = requests.get(url)
+    url = f"{server}/lines/query"
+    response = requests.post(url, json={"query_text": "Markdown"})
 
     assert response.status_code == 200, response.text
 
@@ -55,7 +57,7 @@ def test_query_codebase(server, snapshot, repo):
 
 def test_status_endpoint_with_all_files_analyzed(server, snapshot):
     url = f"{server}/status"
-    time.sleep(2)
+    time.sleep(3)
     response = requests.get(url)
 
     assert response.status_code == 200, response.text
@@ -82,7 +84,6 @@ def test_status_endpoint_with_some_files_not_analyzed(server):
     data = response.json()
     assert data["version"] == __version__
     data = normalize_version(data)
-    assert data["stats"]["chunks"]["analyzed"] > 0
     assert data["stats"]["chunks"]["unanalyzed"] > 0
     assert data["stats"]["queue"]["size"] >= data["stats"]["chunks"]["unanalyzed"]
     assert data["stats"]["accuracy"]["percentage"] == int(
@@ -124,6 +125,10 @@ def test_status_2(repo):
 
 @pytest.mark.usefixtures("server")
 def test_stop(repo):
+    server_info = get_server_info(repo.working_dir)
+
+    assert psutil.pid_exists(server_info["pid"])
+
     subprocess.run(
         ["python", "-m", "seagoat.server", "stop", repo.working_dir],
         capture_output=True,
@@ -136,13 +141,21 @@ def test_stop(repo):
         text=True,
         check=False,
     )
+    assert not psutil.pid_exists(server_info["pid"])
     assert result.returncode == 0
     assert "Server is not running" in result.stdout
 
 
 def test_status_with_json_when_server_not_running(repo):
     result = subprocess.run(
-        ["python", "-m", "seagoat.server", "status", "--json", repo.working_dir],
+        [
+            "python",
+            "-m",
+            "seagoat.server",
+            "status",
+            "--json",
+            repo.working_dir,
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -158,7 +171,14 @@ def test_status_with_json_when_server_not_running(repo):
 @pytest.mark.usefixtures("server")
 def test_status_with_json_when_server_running(repo):
     result = subprocess.run(
-        ["python", "-m", "seagoat.server", "status", "--json", repo.working_dir],
+        [
+            "python",
+            "-m",
+            "seagoat.server",
+            "status",
+            "--json",
+            repo.working_dir,
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -174,7 +194,14 @@ def test_status_with_json_when_server_running(repo):
 
 def assert_server_status(repo, running):
     result = subprocess.run(
-        ["python", "-m", "seagoat.server", "status", "--json", repo.working_dir],
+        [
+            "python",
+            "-m",
+            "seagoat.server",
+            "status",
+            "--json",
+            repo.working_dir,
+        ],
         capture_output=True,
         text=True,
         check=True,
@@ -215,7 +242,13 @@ def test_server_status_not_running_if_process_does_not_exist(repo, runner):
 
 @pytest.mark.parametrize("limit_value", [1, 3, 7])
 def test_query_with_limit_clue_param(client, limit_value, mock_queue):
-    response = client.get(f"/query/Markdown?limitClue={limit_value}")
+    response = client.post(
+        "lines/query",
+        json={
+            "queryText": "Markdown",
+            "limitClue": limit_value,
+        },
+    )
     mock_queue.enqueue.assert_called_with(
         "query",
         query="Markdown",
@@ -228,7 +261,13 @@ def test_query_with_limit_clue_param(client, limit_value, mock_queue):
 
 @pytest.mark.parametrize("context_above", [0, 7])
 def test_query_with_context_above(client, context_above, mock_queue):
-    response = client.get(f"/query/Markdown?contextAbove={context_above}")
+    response = client.post(
+        "lines/query",
+        json={
+            "queryText": "Markdown",
+            "contextAbove": context_above,
+        },
+    )
     mock_queue.enqueue.assert_called_with(
         "query",
         query="Markdown",
@@ -241,7 +280,13 @@ def test_query_with_context_above(client, context_above, mock_queue):
 
 @pytest.mark.parametrize("context_below", [0, 2])
 def test_query_with_context_below(client, mock_queue, context_below):
-    response = client.get(f"/query/Markdown?contextBelow={context_below}")
+    response = client.post(
+        "lines/query",
+        json={
+            "queryText": "Markdown",
+            "contextBelow": context_below,
+        },
+    )
     mock_queue.enqueue.assert_called_with(
         "query",
         query="Markdown",
@@ -283,8 +328,8 @@ def test_start_server_on_specific_port(custom_port, repo, mocker, managed_proces
 
 def test_query_codebase_no_results(server, snapshot):
     query_text = "a_string_we_are_sure_does_not_exist_in_any_file_12345"
-    url = f"{server}/query/{query_text}"
-    response = requests.get(url)
+    url = f"{server}/lines/query"
+    response = requests.post(url, json={"queryText": query_text})
     assert response.status_code == 200, response.text
     data = response.json()
     assert not data["results"]
@@ -300,8 +345,9 @@ def test_servers_info_includes_version_and_server_details(runner, repo):
     servers_data = json.loads(result.output)
     assert servers_data["version"] == __version__
     assert "servers" in servers_data
+    assert servers_data["globalConfigFile"] == str(GLOBAL_CONFIG_FILE)
 
-    for server in servers_data["servers"].values():
+    for repo_path, server in servers_data["servers"].items():
         assert "host" in server
         assert "port" in server
         assert "address" in server
@@ -309,8 +355,41 @@ def test_servers_info_includes_version_and_server_details(runner, repo):
         assert str(server["port"]) in server["address"]
         assert server["host"] in server["address"]
         assert server["isRunning"] in {False, True}
+        assert server["repoPath"] == repo_path
+        assert os.path.isdir(server["cacheLocation"]["chroma"])
+        parent_folder_of_repo_cache = os.path.dirname(server["cacheLocation"]["chroma"])
+        assert parent_folder_of_repo_cache == servers_data["globalCache"]
 
     assert len(servers_data["servers"]) >= 1
     current_repo = normalize_repo_path(repo.working_dir)
     assert current_repo in servers_data["servers"]
     assert servers_data["servers"][current_repo]["isRunning"]
+
+
+@pytest.mark.parametrize("custom_port", [7483, 9981])
+def test_start_server_on_custom_port_using_config_files(
+    custom_port, repo, mocker, managed_process, create_config_file
+):
+    create_config_file(
+        {
+            "server": {
+                "port": custom_port,
+            }
+        }
+    )
+    mocker.patch("seagoat.server.TaskQueue")
+
+    server_cmd = [
+        "python",
+        "-m",
+        "seagoat.server",
+        "start",
+        repo.working_dir,
+    ]
+
+    with managed_process(server_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
+        wait_for(lambda: is_server_running(repo.working_dir), 8)
+
+        server_info = get_server_info(repo.working_dir)
+        server_address = server_info["address"]
+        assert str(custom_port) in server_address

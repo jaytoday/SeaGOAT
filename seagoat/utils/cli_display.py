@@ -1,4 +1,3 @@
-# pylint: disable=import-outside-toplevel
 import math
 import subprocess
 from functools import cache
@@ -12,10 +11,9 @@ def get_highlighted_lines(file_name: str):
     from pygments import highlight
     from pygments.formatters import TerminalFormatter
     from pygments.lexers import get_lexer_for_filename
-    from pygments.lexers.javascript import JavascriptLexer
-    from pygments.lexers.javascript import TypeScriptLexer
+    from pygments.lexers.javascript import JavascriptLexer, TypeScriptLexer
 
-    with open(file_name, "r", encoding="utf-8") as source_code_file:
+    with open(file_name, encoding="utf-8") as source_code_file:
         code = source_code_file.read()
 
     if file_name.endswith(".md"):
@@ -74,7 +72,7 @@ def display_results_using_bat(results, max_results):
         if current_result is None:
             current_result = result
 
-        if result["fullPath"] != current_result["fullPath"]:
+        if result["path"] != current_result["path"]:
             display_blocks_with_bat(current_result, blocks)
             current_result = result
             blocks = []

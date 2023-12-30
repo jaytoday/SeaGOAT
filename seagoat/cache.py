@@ -2,8 +2,7 @@ import hashlib
 import os
 import pickle
 from pathlib import Path
-from typing import Generic
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 import appdirs
 
@@ -11,7 +10,18 @@ T = TypeVar("T")
 
 # Change this whenever a new version is released that requires files to be
 # re-analyzed
-CACHE_FORMAT_VERSION = 24
+CACHE_FORMAT_VERSION = 27
+
+
+def get_cache_root():
+    if "RUNNER_TEMP" in os.environ:
+        return Path(os.environ["RUNNER_TEMP"])
+
+    return Path(
+        appdirs.user_cache_dir(
+            "seagoat-pytest" if "PYTEST_CURRENT_TEST" in os.environ else "seagoat"
+        )
+    )
 
 
 class Cache(Generic[T]):
@@ -35,20 +45,10 @@ class Cache(Generic[T]):
         return self.get_cache_folder() / self._cache_name
 
     def get_cache_folder(self):
-        cache_folder = self._get_cache_root() / self._get_project_hash()
+        cache_folder = get_cache_root() / self._get_project_hash()
         cache_folder.mkdir(parents=True, exist_ok=True)
 
-        return cache_folder
-
-    def _get_cache_root(self):
-        if "RUNNER_TEMP" in os.environ:
-            return Path(os.environ["RUNNER_TEMP"])
-
-        return Path(
-            appdirs.user_cache_dir(
-                "seagoat-pytest" if "PYTEST_CURRENT_TEST" in os.environ else "seagoat"
-            )
-        )
+        return (cache_folder).resolve()
 
     def _get_project_hash(self):
         normalized_path = Path(self._path).expanduser().resolve()

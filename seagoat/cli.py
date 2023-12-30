@@ -1,6 +1,6 @@
-# pylint: disable=too-many-arguments
 import os
 import sys
+from pathlib import Path
 
 import click
 import orjson
@@ -8,11 +8,10 @@ import requests
 
 from seagoat import __version__
 from seagoat.utils.cli_display import display_results
-from seagoat.utils.server import get_server_info
-from seagoat.utils.server import ServerDoesNotExist
+from seagoat.utils.config import get_config_values
+from seagoat.utils.server import ServerDoesNotExist, get_server_info
 
 
-# pylint: disable-next=too-few-public-methods
 class ExitCode:
     SERVER_NOT_RUNNING = 3
     SERVER_ERROR = 4
@@ -47,22 +46,40 @@ def display_accuracy_warning(server_address):
 
 
 def query_server(query, server_address, max_results, context_above, context_below):
-    response = requests.get(
-        f"{server_address}/query/{query}",
-        params={
+    response = requests.post(
+        f"{server_address}/lines/query",
+        json={
+            "queryText": query,
             "limitClue": max_results,
             "contextAbove": context_above,
             "contextBelow": context_below,
         },
+        headers={"Content-Type": "application/json"},
     )
 
     response_data = orjson.loads(response.text)
+
     if "error" in response_data:
         click.echo(response_data["error"]["message"], err=True)
         sys.exit(ExitCode.SERVER_ERROR)
 
     response.raise_for_status()
+
     return response_data["results"]
+
+
+def rewrite_full_paths_to_use_local_path(repo_path, results):
+    return [
+        {
+            **result,
+            "fullPath": str((Path(repo_path) / result["path"]).expanduser().resolve()),
+        }
+        for result in results
+    ]
+
+
+def remove_results_from_unavailable_files(results):
+    return [result for result in results if Path(result["fullPath"]).exists()]
 
 
 @click.command()
@@ -103,7 +120,13 @@ def query_server(query, server_address, max_results, context_above, context_belo
 )
 @click.version_option(version=__version__, prog_name="seagoat")
 def seagoat(
-    query, repo_path, no_color, max_results, context_above, context_below, context
+    query,
+    repo_path,
+    no_color,
+    max_results,
+    context_above,
+    context_below,
+    context,
 ):
     """
     Query your codebase for your QUERY in the Git repository REPO_PATH.
@@ -116,9 +139,14 @@ def seagoat(
     In order to use seagoat in your repository, you need to run a server
     that will analyze your codebase. Check seagoat-server --help for more details.
     """
+    config = get_config_values(Path(repo_path))
+
     try:
-        server_info = get_server_info(repo_path)
-        server_address = server_info["address"]
+        if config["client"]["host"] is None:
+            server_info = get_server_info(repo_path)
+            server_address = server_info["address"]
+        else:
+            server_address = config["client"]["host"]
 
         if context is not None:
             context_above = context
@@ -128,16 +156,18 @@ def seagoat(
             query,
             server_address,
             max_results,
-            context_above or 0,
-            context_below or 0,
+            context_above if context_above is not None else 3,
+            context_below if context_below is not None else 3,
         )
+
+        results = rewrite_full_paths_to_use_local_path(repo_path, results)
+        results = remove_results_from_unavailable_files(results)
 
         color_enabled = os.isatty(0) and not no_color
 
         display_results(results, max_results, color_enabled)
 
         display_accuracy_warning(server_address)
-        warn_if_update_available()
     except (
         requests.exceptions.ConnectionError,
         requests.exceptions.RequestException,
@@ -150,7 +180,13 @@ def seagoat(
         )
         sys.exit(ExitCode.SERVER_NOT_RUNNING)
 
+    try:
+        warn_if_update_available()
+    except requests.exceptions.ConnectionError:
+        click.echo(
+            "Could not check for updates because the pypi.org API is not accessible"
+        )
+
 
 if __name__ == "__main__":
-    # pylint: disable-next=no-value-for-parameter
     seagoat()

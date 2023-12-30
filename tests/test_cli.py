@@ -1,3 +1,7 @@
+import os
+import re
+import shutil
+import tempfile
 from typing import List
 
 import orjson
@@ -6,8 +10,7 @@ import requests
 from click.testing import CliRunner
 
 from seagoat import __version__
-from seagoat.cli import seagoat
-from seagoat.cli import warn_if_update_available
+from seagoat.cli import query_server, seagoat, warn_if_update_available
 from seagoat.utils.cli_display import is_bat_installed
 from seagoat.utils.server import update_server_info
 from tests.conftest import MagicMock
@@ -196,7 +199,7 @@ def lots_of_fake_results(mocker):
 
     mock_response = MagicMock()
     mock_response.text = orjson.dumps(mock_results)
-    mocker.patch("requests.get", return_value=mock_response)
+    mocker.patch("requests.post", return_value=mock_response)
 
     return mock_results
 
@@ -224,12 +227,12 @@ def get_request_args_from_cli_call_(mock_server_factory, mocker, runner, repo):
             mock_response.text = '{"results": []}'
 
             request_args["url"] = args[0]
-            request_args["params"] = kwargs.get("params", {})
+            request_args["json"] = kwargs.get("json", {})
 
             return mock_response
 
-        mocked_requests_get = mocker.patch(
-            "seagoat.cli.requests.get", side_effect=fake_requests
+        mocked_requests_post = mocker.patch(
+            "seagoat.cli.requests.post", side_effect=fake_requests
         )
         query = "JavaScript"
         result = runner.invoke(
@@ -237,7 +240,7 @@ def get_request_args_from_cli_call_(mock_server_factory, mocker, runner, repo):
             [query, repo.working_dir, "--no-color", *cli_args],
         )
         assert result.exit_code == 0
-        mocked_requests_get.assert_called_once()
+        mocked_requests_post.assert_called_once()
 
         return request_args
 
@@ -257,7 +260,6 @@ def mock_response_(mocker):
 
 @pytest.fixture
 def mock_accuracy_warning(mocker):
-    # pylint: disable-next=unused-argument
     def _noop(*args, **kwargs):
         pass
 
@@ -266,7 +268,6 @@ def mock_accuracy_warning(mocker):
 
 @pytest.fixture
 def mock_query_server(mocker):
-    # pylint: disable-next=unused-argument
     def _mocked_query_server(*args, **kwargs):
         return []
 
@@ -310,42 +311,17 @@ def test_seagoat_warns_on_incomplete_accuracy(
 @pytest.mark.parametrize("max_length", [1, 2, 10])
 def test_forwards_limit_clue_to_server(max_length, get_request_args_from_cli_call):
     request_args = get_request_args_from_cli_call(["--max-results", str(max_length)])
-    assert request_args["params"]["limitClue"] == max_length
-
-
-@pytest.mark.usefixtures("server", "mock_accuracy_warning", "bat_not_available")
-def test_integration_test_with_color(
-    snapshot, repo, mocker, runner, mock_warn_if_update_available
-):
-    mocker.patch("os.isatty", return_value=True)
-    query = "JavaScript"
-    result = runner.invoke(seagoat, [query, repo.working_dir])
-
-    assert result.output == snapshot
-    assert result.exit_code == 0
-
-    assert mock_warn_if_update_available.call_count == 1
-
-
-@pytest.mark.usefixtures(
-    "server", "mock_accuracy_warning", "bat_available", "lots_of_fake_results"
-)
-def test_integration_test_with_color_and_bat(snapshot, repo, mocker, runner, bat_calls):
-    mocker.patch("os.isatty", return_value=True)
-    query = "JavaScript"
-    result = runner.invoke(seagoat, [query, repo.working_dir])
-
-    assert bat_calls == snapshot
-    assert result.exit_code == 0
+    assert request_args["json"]["limitClue"] == max_length
 
 
 @pytest.mark.usefixtures("server", "mock_accuracy_warning")
-def test_integration_test_without_color(snapshot, repo, mocker, runner):
+def test_integration_test_without_color(snapshot, repo, mocker, runner, temporary_cd):
     mocker.patch("os.isatty", return_value=True)
     query = "JavaScript"
-    result = runner.invoke(seagoat, [query, repo.working_dir, "--no-color"])
+    with temporary_cd(repo.working_dir):
+        result = runner.invoke(seagoat, [query, ".", "--no-color"])
 
-    assert result.output == snapshot
+    assert str(result.output) == snapshot
     assert result.exit_code == 0
 
 
@@ -362,9 +338,13 @@ def test_integration_test_without_color(snapshot, repo, mocker, runner):
         (2, "-l", 3),
     ],
 )
-# pylint: disable-next=too-many-arguments
 def test_limit_output_length(
-    repo, max_length, command_option, mock_server_factory, runner, expected_length
+    repo,
+    max_length,
+    command_option,
+    mock_server_factory,
+    runner,
+    expected_length,
 ):
     mock_server_factory(
         [
@@ -380,7 +360,13 @@ def test_limit_output_length(
     query = "JavaScript"
     result = runner.invoke(
         seagoat,
-        [query, repo.working_dir, "--no-color", command_option, str(max_length)],
+        [
+            query,
+            repo.working_dir,
+            "--no-color",
+            command_option,
+            str(max_length),
+        ],
     )
 
     assert len(result.output.splitlines()) == min(expected_length, 15)
@@ -403,8 +389,15 @@ def test_version_option(runner):
     ],
 )
 def test_server_is_not_running_error(mocker, repo_path, snapshot):
-    new_server_data = {"host": "localhost", "port": 345435, "pid": 234234}
-    update_server_info(repo_path, new_server_data)
+    update_server_info(
+        repo_path,
+        {
+            "host": "localhost",
+            "port": 345435,
+            "pid": 234234,
+            "address": "http://example.com",
+        },
+    )
     runner = CliRunner()
 
     mocker.patch("os.isatty", return_value=True)
@@ -412,7 +405,7 @@ def test_server_is_not_running_error(mocker, repo_path, snapshot):
     result = runner.invoke(seagoat, [query, repo_path])
 
     assert result.exit_code == 3
-    assert result.output == snapshot
+    assert str(result.output) == snapshot
 
 
 def test_documentation_present(runner):
@@ -429,10 +422,10 @@ def test_forwards_context_above_to_server(
     request_args1 = get_request_args_from_cli_call(
         ["--context-above", str(context_above)]
     )
-    assert request_args1["params"]["contextAbove"] == context_above
+    assert request_args1["json"]["contextAbove"] == context_above
 
     request_args2 = get_request_args_from_cli_call([f"-B{context_above}"])
-    assert request_args2["params"]["contextAbove"] == context_above
+    assert request_args2["json"]["contextAbove"] == context_above
 
 
 @pytest.mark.usefixtures("mock_accuracy_warning")
@@ -443,22 +436,22 @@ def test_forwards_context_below_to_server(
     request_args1 = get_request_args_from_cli_call(
         ["--context-below", str(context_below)]
     )
-    assert request_args1["params"]["contextBelow"] == context_below
+    assert request_args1["json"]["contextBelow"] == context_below
 
     request_args2 = get_request_args_from_cli_call([f"-A{context_below}"])
-    assert request_args2["params"]["contextBelow"] == context_below
+    assert request_args2["json"]["contextBelow"] == context_below
 
 
 @pytest.mark.usefixtures("mock_accuracy_warning")
-@pytest.mark.parametrize("context", [1, 2, 10])
+@pytest.mark.parametrize("context", [0, 1, 2, 10])
 def test_forwards_context_to_server(context, get_request_args_from_cli_call):
     request_args1 = get_request_args_from_cli_call(["--context", str(context)])
-    assert request_args1["params"]["contextAbove"] == context
-    assert request_args1["params"]["contextBelow"] == context
+    assert request_args1["json"]["contextAbove"] == context
+    assert request_args1["json"]["contextBelow"] == context
 
     request_args2 = get_request_args_from_cli_call([f"-C{context}"])
-    assert request_args2["params"]["contextAbove"] == context
-    assert request_args2["params"]["contextBelow"] == context
+    assert request_args2["json"]["contextAbove"] == context
+    assert request_args2["json"]["contextBelow"] == context
 
 
 @pytest.mark.usefixtures("mock_accuracy_warning")
@@ -478,12 +471,18 @@ def test_limit_does_not_apply_to_context_lines(repo, mock_server_factory, runner
             ["foobar3.py", ["def bonjour():", "    print('monde')"]],
             [
                 "foobar.fake",
-                ["fn hello()", "    echo('world') // I am also a context line"],
+                [
+                    "fn hello()",
+                    "    echo('world') // I am also a context line",
+                ],
             ],
             ["foobar2.fake", ["fn hola()", "    echo('mundo')"]],
             [
                 "foobar3.fake",
-                ["fn bonjour()", "    echo('monde') /* I am too a context line */"],
+                [
+                    "fn bonjour()",
+                    "    echo('monde') /* I am too a context line */",
+                ],
             ],
         ]
     )
@@ -565,7 +564,11 @@ def test_context_lines_are_not_included_from_other_files_when_limit_exceeded(
     [("File Not Found on Server", 500), ("Database Connection Failed", 503)],
 )
 def test_server_error_handling(
-    repo, mock_server_error_factory, runner_with_error, error_message, error_code
+    repo,
+    mock_server_error_factory,
+    runner_with_error,
+    error_message,
+    error_code,
 ):
     mock_server_error_factory(error_message, error_code)
 
@@ -587,7 +590,8 @@ def test_bat_installed(mocker):
 
 def test_bat_not_installed_1(mocker):
     mocker.patch(
-        "seagoat.utils.cli_display.subprocess.run", side_effect=FileNotFoundError
+        "seagoat.utils.cli_display.subprocess.run",
+        side_effect=FileNotFoundError,
     )
     assert is_bat_installed() is False
 
@@ -635,7 +639,132 @@ def test_warn_if_update_available_no_warning(mocker, capsys, mock_response):
 )
 def test_integration_test_no_results(snapshot, repo, mocker, runner):
     mocker.patch("os.isatty", return_value=True)
+    mocker.patch("seagoat.utils.cli_display.display_blocks_with_bat", return_value=True)
     query = "a_string_we_are_sure_does_not_exist_in_any_file_12345"
     result = runner.invoke(seagoat, [query, repo.working_dir])
-    assert result.output == snapshot
+    assert str(result.output) == snapshot
+    assert result.exit_code == 0
+
+
+@pytest.mark.usefixtures("mock_accuracy_warning")
+@pytest.mark.parametrize(
+    "remote_host",
+    ["http://example.com/potato", "https://ejemplo.es/nose/seagoat"],
+)
+def test_configure_remote_server_address(
+    remote_host, get_request_args_from_cli_call, create_config_file
+):
+    create_config_file({"client": {"host": remote_host}})
+    request_args = get_request_args_from_cli_call([])
+    assert request_args["url"].startswith(remote_host)
+
+
+@pytest.mark.usefixtures("mock_accuracy_warning", "bat_available")
+def test_connecting_to_remote_server(
+    repo,
+    mocker,
+    runner,
+    temporary_cd,
+    server,
+    create_config_file,
+    bat_calls,
+    snapshot,
+):
+    """
+    When the user requests data from a remote server,
+    the display logic should not rely on full path
+    as the full path might be different on the remote server
+    than locally
+
+    Also the same files might not always exist.
+
+    This test also tests that results are correctly displayed with bat
+    """
+
+    create_config_file({"client": {"host": server}})
+    mocker.patch("os.isatty", return_value=True)
+    query = "JavaScript"
+
+    def query_server_side_effect(*args, **kwargs):
+        results = query_server(*args, **kwargs)
+
+        results = [{**result, "fullPath": "/non/existent/path/"} for result in results]
+
+        return results
+
+    mocker.patch("seagoat.cli.query_server", side_effect=query_server_side_effect)
+
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        shutil.copytree(
+            repo.working_dir,
+            os.path.join(tmpdirname, "repo_copy"),
+            dirs_exist_ok=True,
+        )
+        repo.add_file_change_commit(
+            file_name="example_should_not_exist_in_copy.txt",
+            contents="""JavaScript is an amazing programming language""",
+            author=repo.actors["John Doe"],
+            commit_message="Add fruits data",
+        )
+        with temporary_cd(os.path.join(tmpdirname, "repo_copy")):
+            result = runner.invoke(seagoat, [query, "."])
+
+    assert result.exit_code == 0
+
+    for bat_call in bat_calls:
+        assert "example_should_not_exist_in_copy.txt" not in str(bat_call)
+
+    assert [
+        re.sub(r" .*repo_copy[/|\\]", " normalized_repo_path/", call)
+        for call in bat_calls
+    ] == snapshot
+
+    assert len(bat_calls) == 2
+
+
+def test_server_does_not_exist_error(runner_with_error, mocker, repo):
+    mocker.patch(
+        "seagoat.cli.requests.get",
+        side_effect=requests.exceptions.ConnectionError,
+    )
+    query = "JavaScript"
+    result = runner_with_error.invoke(seagoat, [query, repo.working_dir])
+
+    assert result.exit_code == 3
+    assert "The SeaGOAT server is not running" in result.output
+
+
+@pytest.mark.usefixtures("mock_query_server")
+def test_no_network_to_update(runner_with_error, mocker, mock_response, repo):
+    mocked_response = {
+        "stats": {
+            "chunks": {"analyzed": 100, "unanalyzed": 0},
+            "queue": {"size": 0},
+            "accuracy": {"percentage": 100},
+        },
+        "version": __version__,
+    }
+
+    mocker.patch("requests.get", return_value=mock_response(mocked_response))
+    mocker.patch("seagoat.cli.get_server_info", return_value={"address": ""})
+    mocker.patch(
+        "seagoat.cli.warn_if_update_available",
+        side_effect=requests.exceptions.ConnectionError,
+    )
+    result = runner_with_error.invoke(seagoat, ["search", repo.working_dir])
+
+    assert result.exit_code == 0
+    assert "Could not check for updates" in result.output
+
+
+@pytest.mark.usefixtures("server", "mock_accuracy_warning")
+def test_does_not_crash_with_slash_in_request(
+    snapshot, repo, mocker, runner, temporary_cd
+):
+    mocker.patch("os.isatty", return_value=True)
+    query = "JavaScript/TypeScript"
+
+    with temporary_cd(repo.working_dir):
+        result = runner.invoke(seagoat, [query, ".", "--no-color"])
+
     assert result.exit_code == 0

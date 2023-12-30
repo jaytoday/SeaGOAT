@@ -1,21 +1,18 @@
 import logging
 import threading
-from dataclasses import dataclass
-from dataclasses import field
-from queue import Empty
-from queue import PriorityQueue
-from typing import Any
-from typing import Dict
-from typing import Tuple
+from dataclasses import dataclass, field
+from queue import Empty, PriorityQueue
+from typing import Any, Dict, Tuple
 from uuid import uuid4
 
-HIGH_PRIORITY = 0
-LOW_PRIORITY = 1
+HIGH_PRIORITY = 0.0
+MEDIUM_PRIORITY = 0.5
+LOW_PRIORITY = 1.0
 
 
 @dataclass(order=True)
 class Task:
-    priority: int
+    priority: float
     name: str
     args: Tuple[Any, ...] = field(default_factory=tuple, compare=False)
     kwargs: Dict[str, Any] = field(default_factory=dict, compare=False)
@@ -33,7 +30,12 @@ class BaseQueue:
         return {}
 
     def enqueue(
-        self, task_name, *args, priority=HIGH_PRIORITY, wait_for_result=True, **kwargs
+        self,
+        task_name,
+        *args,
+        priority=HIGH_PRIORITY,
+        wait_for_result=True,
+        **kwargs,
     ):
         result_queue = PriorityQueue()
         task = Task(
@@ -73,7 +75,7 @@ class BaseQueue:
 
         while True:
             try:
-                task = self._task_queue.get(timeout=1)
+                task = self._task_queue.get(timeout=0.1)
                 if task.name == "shutdown":
                     break
                 self._handle_task(context, task)

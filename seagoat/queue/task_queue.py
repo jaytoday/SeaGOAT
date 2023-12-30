@@ -1,12 +1,13 @@
-# pylint: disable=import-outside-toplevel
 import logging
 import math
+import time
 
 import orjson
 
 from seagoat import __version__
-from seagoat.queue.base_queue import BaseQueue
-from seagoat.queue.base_queue import LOW_PRIORITY
+from seagoat.queue.base_queue import LOW_PRIORITY, MEDIUM_PRIORITY, BaseQueue
+
+SECONDS_BETWEEN_MAINTENANCE = 10
 
 
 def calculate_accuracy(chunks_analyzed: int, total_chunks: int) -> int:
@@ -40,9 +41,26 @@ class TaskQueue(BaseQueue):
 
         seagoat_engine = Engine(self.kwargs["repo_path"])
         context["seagoat_engine"] = seagoat_engine
+        context["last_maintenance"] = None
+        context["last_repo_state_hash"] = None
         return context
 
     def handle_maintenance(self, context):
+        if (
+            context["last_maintenance"] is not None
+            and time.time() - context["last_maintenance"] < SECONDS_BETWEEN_MAINTENANCE
+        ):
+            return
+
+        current_repo_state_hash = context["seagoat_engine"].repository.get_status_hash()
+
+        # Do not re-analyze repo if nothing changed
+        if context["last_repo_state_hash"] == current_repo_state_hash:
+            return
+
+        context["last_repo_state_hash"] = current_repo_state_hash
+        context["last_maintenance"] = time.time()
+
         if self._task_queue.qsize() > 0:
             return
 
@@ -58,9 +76,17 @@ class TaskQueue(BaseQueue):
                 len(remaining_chunks_to_analyze),
             )
 
-            for chunk in remaining_chunks_to_analyze:
+            for task_index, chunk in enumerate(remaining_chunks_to_analyze):
+                priority = MEDIUM_PRIORITY + (
+                    (LOW_PRIORITY - MEDIUM_PRIORITY)
+                    / len(remaining_chunks_to_analyze)
+                    * task_index
+                )
                 self.enqueue(
-                    "analyze_chunk", chunk, priority=LOW_PRIORITY, wait_for_result=False
+                    "analyze_chunk",
+                    chunk,
+                    priority=priority,
+                    wait_for_result=False,
                 )
         else:
             logging.info("Analyzed all chunks!")
@@ -74,20 +100,22 @@ class TaskQueue(BaseQueue):
             logging.info("Analyzed all chunks!")
 
     def handle_query(self, context, **kwargs):
-        context["seagoat_engine"].query(kwargs["query"])
-        context["seagoat_engine"].fetch_sync(
+        results = context["seagoat_engine"].query_sync(
+            kwargs["query"],
             limit_clue=kwargs["limit_clue"],
             context_above=int(kwargs["context_above"]),
             context_below=int(kwargs["context_below"]),
         )
-        results = context["seagoat_engine"].get_results(kwargs["limit_clue"])
+        formatted_results = [result.to_json() for result in results]
 
-        return orjson.dumps(
+        serialized_results = orjson.dumps(
             {
-                "results": [result.to_json(kwargs["query"]) for result in results],
+                "results": formatted_results,
                 "version": __version__,
             }
         )
+
+        return serialized_results
 
     def handle_get_stats(self, context):
         engine = context["seagoat_engine"]

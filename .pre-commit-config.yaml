@@ -8,22 +8,15 @@ repos:
           - id: end-of-file-fixer
           - id: check-yaml
           - id: check-added-large-files
-            exclude: ^(docs/assets/demo\.gif|assets/demo\.gif)$
+            exclude: ^(docs/assets/.*|assets/.*|benchmark/results/.*)$
 
-    - repo: https://github.com/asottile/reorder-python-imports
-      rev: v3.10.0
-      hooks:
-          - id: reorder-python-imports
 
-    - repo: https://github.com/psf/black
-      rev: 23.7.0
+    - repo: https://github.com/astral-sh/ruff-pre-commit
+      rev: v0.1.1
       hooks:
-          - id: black
-
-    - repo: https://github.com/PyCQA/pylint
-      rev: v3.0.0a6
-      hooks:
-          - id: pylint
+          - id: ruff-format
+          - id: ruff
+            args: [--fix, --exit-non-zero-on-fix]
 
     - repo: https://github.com/RobertCraigie/pyright-python
       rev: v1.1.318
@@ -49,3 +42,4 @@ repos:
             args:
                 - --verbose
                 - --ignore=tests/conftest.py
+                - --ignore=seagoat/utils/debug.py

@@ -1,11 +1,19 @@
 import os
 import socket
 from pathlib import Path
+from typing import Dict, TypedDict, Union
 
 import appdirs
+import psutil
 
-from seagoat.utils.json_file import get_json_file_contents
-from seagoat.utils.json_file import write_to_json_file
+from seagoat.utils.json_file import get_json_file_contents, write_to_json_file
+
+
+class ServerInfo(TypedDict):
+    address: str
+    host: str
+    port: int
+    pid: int
 
 
 class ServerDoesNotExist(Exception):
@@ -18,16 +26,18 @@ def _get_server_data_file_path() -> Path:
     return user_cache_dir / "serverData.json"
 
 
-def normalize_repo_path(repo_path: str) -> str:
+def normalize_repo_path(repo_path: Union[str, Path]) -> str:
     return str(os.path.normpath(Path(repo_path).expanduser().resolve()))
 
 
-def get_servers_info() -> dict:
+def get_servers_info() -> Dict[str, ServerInfo]:
     path = _get_server_data_file_path()
     if not os.path.exists(path):
         write_to_json_file(path, {})
 
     contents = get_json_file_contents(path)
+    if contents is None:
+        contents = {}
 
     for key in list(contents.keys()):
         if not os.path.exists(key):
@@ -36,7 +46,9 @@ def get_servers_info() -> dict:
     return contents
 
 
-def update_server_info(repo_path: str, new_server_data: dict) -> None:
+def update_server_info(
+    repo_path: Union[str, Path], new_server_data: ServerInfo
+) -> None:
     servers_info = get_servers_info()
     repo_id = normalize_repo_path(repo_path)
     servers_info[repo_id] = new_server_data
@@ -44,17 +56,23 @@ def update_server_info(repo_path: str, new_server_data: dict) -> None:
     write_to_json_file(_get_server_data_file_path(), servers_info)
 
 
-def remove_server_info(repo_path: str) -> None:
+def stop_server(repo_path: Union[str, Path]) -> None:
     servers_info = get_servers_info()
     repo_id = normalize_repo_path(repo_path)
     if repo_id in servers_info:
+        server_info = servers_info[repo_id]
+        process = psutil.Process(server_info["pid"])
+
         servers_info.pop(repo_id)
         write_to_json_file(_get_server_data_file_path(), servers_info)
+
+        process.terminate()
+        process.wait()
     else:
         raise ServerDoesNotExist(f"Server for {repo_path} does not exist.")
 
 
-def get_server_info(repo_path: str) -> dict:
+def get_server_info(repo_path: Union[str, Path]) -> ServerInfo:
     servers_info = get_servers_info()
     repo_id = normalize_repo_path(repo_path)
 
@@ -62,11 +80,10 @@ def get_server_info(repo_path: str) -> dict:
         raise ServerDoesNotExist(f"Server for {repo_path} does not exist.")
 
     server_info = servers_info[repo_id]
-    server_info["address"] = f"http://{server_info['host']}:{server_info['port']}"
     return server_info
 
 
-def is_server_running(repo_path: str):
+def is_server_running(repo_path: Union[str, Path]) -> bool:
     try:
         server_info = get_server_info(repo_path)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket_obj:
@@ -77,7 +94,7 @@ def is_server_running(repo_path: str):
         return False
 
 
-def get_free_port():
+def get_free_port() -> int:
     socket_obj = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     socket_obj.bind(("", 0))
     _, port = socket_obj.getsockname()

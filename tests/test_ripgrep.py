@@ -23,11 +23,10 @@ async def test_includes_all_matching_lines_from_line(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "19"
-    seagoat.query(my_query)
-    await seagoat.fetch()
+    results = await seagoat.query(my_query)
 
-    assert seagoat.get_results()[0].path == "events.txt"
-    assert set(seagoat.get_results()[0].get_lines(my_query)) == {4, 6, 9}
+    assert results[0].gitfile.path == "events.txt"
+    assert set(results[0].get_lines()) == {4, 6, 9}
 
 
 @pytest.mark.asyncio
@@ -50,11 +49,10 @@ async def test_search_is_case_insensitive(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "UNRELATED"
-    seagoat.query(my_query)
-    await seagoat.fetch()
+    results = await seagoat.query(my_query)
 
-    assert seagoat.get_results()[0].path == "events.txt"
-    assert set(seagoat.get_results()[0].get_lines(my_query)) == {5}
+    assert results[0].gitfile.path == "events.txt"
+    assert set(results[0].get_lines()) == {5}
 
 
 @pytest.mark.asyncio
@@ -68,10 +66,9 @@ async def test_respects_file_extension_restrictions(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "19"
-    seagoat.query(my_query)
-    await seagoat.fetch()
+    results = await seagoat.query(my_query)
 
-    assert "rock.mp3" not in [result.path for result in seagoat.get_results()]
+    assert "rock.mp3" not in [result.gitfile.path for result in results]
 
 
 @pytest.mark.parametrize(
@@ -99,16 +96,100 @@ async def test_includes_context_lines_properly(
         8: Some other information
         9: The fall of the Berlin Wall 1989
         10: Random event
-        11: Another unrelated data
-        """,
+        11: Another unrelated data""",
         author=repo.actors["John Doe"],
         commit_message="Add historical events",
     )
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "19"
-    seagoat.query(my_query)
-    seagoat.fetch_sync(context_above=context_above, context_below=context_below)
+    results = seagoat.query_sync(
+        my_query, context_above=context_above, context_below=context_below
+    )
 
-    assert seagoat.get_results()[0].path == "events.txt"
-    assert set(seagoat.get_results()[0].get_lines(my_query)) == expected_lines
+    assert results[0].gitfile.path == "events.txt"
+    assert set(results[0].get_lines()) == expected_lines
+
+
+@pytest.mark.asyncio
+async def test_ripgrep_respects_custom_ignore_patterns(repo, create_config_file):
+    create_config_file({"server": {"ignorePatterns": ["**/events.txt"]}})
+
+    repo.add_file_change_commit(
+        file_name="history/files/events.txt",
+        contents="Battle of Waterloo 1815",
+        author=repo.actors["John Doe"],
+        commit_message="commit",
+    )
+
+    repo.add_file_change_commit(
+        file_name="events.txt",
+        contents="Moon landing 1969",
+        author=repo.actors["John Doe"],
+        commit_message="Add historical events",
+    )
+
+    seagoat = Engine(repo.working_dir)
+    seagoat.analyze_codebase()
+    my_query = "1"
+    results = await seagoat.query(my_query)
+
+    results_files = set(result.gitfile.path for result in results)
+    assert "history/files/events.txt" not in results_files
+    assert "events.txt" in results_files
+
+
+@pytest.mark.asyncio
+async def test_filters_stop_words(repo):
+    repo.add_file_change_commit(
+        file_name="events.txt",
+        contents="""1: Nothing
+        2: Battle of Waterloo 1815
+        3:
+        4:
+        5: that that that
+        6:
+        7: The signing of the Magna Carta 1215
+        8: Some other information
+        9: The fall of the Berlin Wall 1989
+        """,
+        author=repo.actors["John Doe"],
+        commit_message="Add historical events",
+    )
+    seagoat = Engine(repo.working_dir)
+    seagoat.analyze_codebase()
+    my_query = "that this the potato 1989"
+    results = await seagoat.query(my_query)
+
+    events_result = [
+        result for result in results if result.gitfile.path == "events.txt"
+    ][0]
+    assert 5 not in set(events_result.get_lines())
+
+
+@pytest.mark.asyncio
+async def test_does_not_filter_stop_words_if_that_is_all_whats_in_the_query(repo):
+    repo.add_file_change_commit(
+        file_name="events.txt",
+        contents="""1: Nothing
+        2: Battle of Waterloo 1815
+        3:
+        4:
+        5: that that that
+        6:
+        7: The signing of the Magna Carta 1215
+        8: Some other information
+        9: The fall of the Berlin Wall 1989
+        """,
+        author=repo.actors["John Doe"],
+        commit_message="Add historical events",
+    )
+    seagoat = Engine(repo.working_dir)
+    seagoat.analyze_codebase()
+    my_query = "that this their"
+    results = await seagoat.query(my_query)
+
+    events_result = [
+        result for result in results if result.gitfile.path == "events.txt"
+    ][0]
+    assert set(events_result.get_lines()) == {5}

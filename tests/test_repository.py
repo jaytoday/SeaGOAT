@@ -1,4 +1,3 @@
-# pylint: disable=protected-access
 from pathlib import Path
 
 from freezegun import freeze_time
@@ -16,6 +15,7 @@ def test_returns_file_list_1(repo):
         "file2.py",
         "file3.py",
         "file4.js",
+        "file4.md",
     }
     assert set(seagoat.repository.get_file("file1.md").commit_messages) == {
         "Initial commit for Markdown file",
@@ -38,6 +38,7 @@ def test_returns_file_list_2(repo):
         "file2.py",
         "file3.py",
         "file4.js",
+        "file4.md",
         "new_file.cpp",
     }
     assert set(seagoat.repository.get_file("new_file.cpp").commit_messages) == {
@@ -81,6 +82,25 @@ def test_newer_change_can_beat_frequent_change_in_past(repo):
     assert seagoat.repository.top_files()[0][0].path == "new_file.txt"
 
 
+def test_commit_messages_with_three_or_more_colons(repo):
+    seagoat = Engine(repo.working_dir)
+    commit_messages = set()
+    for i in range(5):
+        message = "add my file" + ":" * i + "!"
+        commit_messages.add(message)
+        repo.add_file_change_commit(
+            file_name="file.txt",
+            contents=f"{i}",
+            author=repo.actors["John Doe"],
+            commit_message=message,
+        )
+    seagoat.analyze_codebase()
+
+    assert (
+        set(seagoat.repository.get_file("file.txt").commit_messages) == commit_messages
+    )
+
+
 def test_ignores_certain_branches(repo):
     seagoat = Engine(repo.working_dir)
     main = repo.active_branch
@@ -113,6 +133,7 @@ def test_analysis_results_are_persisted_between_runs(repo):
         "file2.py",
         "file3.py",
         "file4.js",
+        "file4.md",
     }
 
 
@@ -134,6 +155,7 @@ def test_damaged_cache_doesnt_crash_app_1(repo):
         "file2.py",
         "file3.py",
         "file4.js",
+        "file4.md",
     }
 
 
@@ -152,6 +174,7 @@ def test_damaged_cache_doesnt_crash_app_2(repo):
         "file2.py",
         "file3.py",
         "file4.js",
+        "file4.md",
     }
 
 
@@ -171,6 +194,7 @@ def test_only_returns_supported_file_types(repo):
         "file2.py",
         "file3.py",
         "file4.js",
+        "file4.md",
     }
     assert set(seagoat.repository.get_file("file1.md").commit_messages) == {
         "Initial commit for Markdown file",
@@ -237,6 +261,7 @@ def test_does_not_crash_because_of_non_existent_files(repo):
         "file2.py",
         "file3.py",
         "file4.js",
+        "file4.md",
     }
 
 

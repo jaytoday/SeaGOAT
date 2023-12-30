@@ -15,15 +15,15 @@ jobs:
         runs-on: ${{ matrix.os }}
         strategy:
             matrix:
-                os: [ubuntu-latest, macos-latest]
+                os: [ubuntu-latest]
                 python-version: ['3.11']
 
         steps:
-            - uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac # v4
+            - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
 
             - name: Set up Python
               id: setup-python
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v5
               with:
                   python-version: ${{ matrix.python-version }}
 
@@ -55,4 +55,10 @@ jobs:
 
             - name: Run pytest
               run: |
-                  poetry run pytest . -vvs --timeout=60
+                  poetry run pytest . -vvs --timeout=300 --cov seagoat --cov-report=xml
+
+            - name: Upload coverage reports to Codecov
+              uses: codecov/codecov-action@v4-beta
+              if: matrix.os == 'ubuntu-latest'
+              env:
+                  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

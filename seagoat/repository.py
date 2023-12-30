@@ -1,15 +1,17 @@
 import datetime
+import hashlib
 import math
 import subprocess
 from collections import defaultdict
 from pathlib import Path
 
-from seagoat.common import SUPPORTED_FILE_TYPES
-from seagoat.file import File
+from seagoat.gitfile import GitFile
+from seagoat.utils.file_reader import autodecode_bytes
+from seagoat.utils.file_types import is_file_type_supported
 
 
 def parse_commit_info(raw_line: str):
-    commit_hash, date_str, author, commit_subject = raw_line.split(":::")
+    commit_hash, date_str, author, commit_subject = raw_line.split(":::", 3)
 
     commit_date = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S %z").date()
     today = datetime.date.today()
@@ -23,6 +25,49 @@ class Repository:
         self.path = Path(repo_path)
         self.file_changes = defaultdict(list)
         self.frecency_scores = {}
+
+    def _get_head_hash(self):
+        return subprocess.check_output(
+            ["git", "-C", str(self.path), "rev-parse", "HEAD"], text=True
+        ).strip()
+
+    def _get_working_tree_diff(self):
+        return subprocess.check_output(
+            ["git", "-C", str(self.path), "diff"], text=True
+        ).strip()
+
+    def get_file_object_id(self, file_path: str):
+        """
+        Returns the git object id for the current version
+        of a file
+        """
+        object_id = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(self.path),
+                "ls-tree",
+                "HEAD",
+                str(file_path),
+                "--object-only",
+            ],
+            text=True,
+        ).strip()
+
+        return object_id
+
+    def get_blob_data(self, object_id: str) -> str:
+        data = subprocess.check_output(
+            ["git", "-C", str(self.path), "cat-file", "-p", object_id]
+        )
+        return autodecode_bytes(data)
+
+    def is_up_to_date_git_object(self, file_path: str, git_object_id: str):
+        return self.get_file_object_id(file_path) == git_object_id
+
+    def get_status_hash(self):
+        combined = self._get_head_hash() + self._get_working_tree_diff()
+        return hashlib.sha256(combined.encode()).hexdigest()
 
     def analyze_files(self):
         cmd = [
@@ -47,7 +92,7 @@ class Repository:
                 elif line:
                     filename = line
 
-                    if Path(filename).suffix not in SUPPORTED_FILE_TYPES:
+                    if not is_file_type_supported(filename):
                         continue
 
                     if not (self.path / filename).exists():
@@ -75,9 +120,15 @@ class Repository:
         ]
 
     def get_file(self, filename: str):
-        return File(
+        """
+        Returns a GitFile object with the current version of the file
+        """
+
+        return GitFile(
+            self,
             filename,
             str(self.path / filename),
+            self.get_file_object_id(filename),
             self.frecency_scores[filename],
             [commit[3] for commit in self.file_changes[filename]],
         )

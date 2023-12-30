@@ -8,7 +8,7 @@
 </h1>
 
 A code search engine for the AI age. SeaGOAT is a local search tool that
-leverages vector embeddings to enable to search your codebase semantically.
+leverages vector embeddings to enable you to search your codebase semantically.
 
 <p align="center">
   <img src="assets/demo-slideshow.gif" alt="" />
@@ -49,7 +49,7 @@ pipx install seagoat
 
 Should work on any decent laptop.
 
-#### Oporating system
+#### Operating system
 
 SeaGOAT is designed to work on Linux (*tested* ✅),
 macOS ([partly tested, **help**](https://github.com/kantord/SeaGOAT/issues/178) 🙏)
@@ -88,6 +88,22 @@ You can stop the running server using the following command:
 ```bash
 seagoat-server stop /path/to/your/repo
 ```
+
+### Configuring SeaGOAT
+
+SeaGOAT can be tailored to your needs through YAML configuration files,
+either globally or project-specifically with a `.seagoat.yml` file.
+For instance:
+
+```yaml
+# .seagoat.yml
+
+server:
+  port: 31134  # Specify server port
+```
+
+[Check out the documentation](https://kantord.github.io/SeaGOAT/latest/configuration/)
+for more details!
 
 ## Development
 
@@ -132,7 +148,7 @@ environment. For example to test the development version of the
 `seagoat-server` command, you can run:
 
 ```bash
-poetry run seagoat-server ~/path/an/example/repository
+poetry run seagoat-server start ~/path/an/example/repository
 ```
 
 ## FAQ
@@ -185,9 +201,9 @@ embeddings. At the moment SeaGOAT uses ChromaDB's default model for
 calculating vector embeddings, and I am not aware of this being an ethical
 concern.
 
-### What programming langauges are supported?
+### What programming languages are supported?
 
-Currently SeaGOAT is hardcoded to only process files in the following
+Currently SeaGOAT is hard coded to only process files in the following
 formats:
 
 - **Text Files** (`*.txt`)
@@ -202,3 +218,50 @@ formats:
 - **Java** (`*.java`)
 - **PHP** (`*.php`)
 - **Ruby** (`*.rb`)
+
+### Why is SeaGOAT processing files so slowly while barely using my CPU?
+
+Since processing files for large repositories can take a long time, SeaGOAT
+is **designed to allow you to use your computer while processing files**. It is
+an intentional design choice to avoid blocking/slowing down your computer.
+
+This design decision does not affect the performance of queries.
+
+**By the way, you are able to use SeaGOAT to query your repository while
+it's processing your files!** When you make a query, and the files are not
+processed yet, you will receive a warning with an estimation of the accuracy
+of your results. Also, regular expression/full text search based results
+will be displayed from the very beginning!
+
+### What character encodings are supported?
+
+The preferred character encoding is UTF-8. Most other character encodings
+should also work. Only text files are supported, SeaGOAT ignores binary files.
+
+### Where does SeaGOAT store it's database/cache?
+
+Where SeaGOAT stores databases and cache depends on your operating system.
+For your convenience, you can use the `seagoat-server server-info`
+command to find out where these files are stored on your system.
+
+### Can I host SeaGOAT server on a different computer?
+
+Yes, if you would like to use SeaGOAT without having to run the server on
+the same computer, you can simply self-host SeaGOAT server on a different
+computer or in the cloud, and
+[configure](https://kantord.github.io/SeaGOAT/latest/configuration/)
+the `seagoat`/`gt` command to connect to this remote server through the
+internet.
+
+Keep in mind that SeaGOAT itself does not enforce any security as it is
+primarily designed to run locally. If you have private code that you do not
+wish to leak, you will have to make sure that only trusted people have
+access to the SeaGOAT server. This could be done by making it only available
+through a VPN that only your teammates can access.
+
+### Can I ignore files/directories?
+
+SeaGOAT already ignores all files/directories ignored in your `.gitignore`.
+If you wish to ignore additional files but keep them in git, you can use the
+`ignorePatterns` attribute from the server configuration.
+[Learn more](https://kantord.github.io/SeaGOAT/latest/configuration/)

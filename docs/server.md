@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD046 -->
 # SeaGOAT-server
 
-The seagoat-server is an integral component of the Seagoat command-line tool
+The `seagoat-server` is an integral component of the Seagoat command-line tool
 designed to analyze your codebase and create vector embeddings for it.
 
 While it serves as a backend for the command-line tool, also allows you to
@@ -15,8 +15,8 @@ To boot up the server for a specific repository, use:
 seagoat-server start <repo_path> [--port=<custom_port>]
 ```
 
-* `repo_path`: Path to your Git repository
-* `--port`: (Optional) Run the server on a specific port
+* `repo_path` - Path to your Git repository.
+* `--port` - (Optional) Run the server on a specific port.
 
 If you don't specify a custom port, a random port will be assigned to your
 server. Don't worry, SeaGOAT will still be able to automatically find
@@ -46,14 +46,22 @@ You will receive a response similar to this:
 ```json
 {
     "version": "0.5.3",
+    "globalCache": "/home/myuser/.cache/seagoat",
+    "globalConfigFile": "/home/myuser/.config/seagoat/config.yml",
     "servers": {
         "/path/to/repository/1": {
+            "cacheLocation": {
+              "chroma": "/home/myuser/.cache/seagoat/bfe8133b9e871ea1c8498a0"
+            },
             "isRunning": true,
             "host": "127.0.0.1",
             "port": "8080",
             "address": "http://127.0.0.1:8080"
         },
         "/path/to/repository/2": {
+            "cacheLocation": {
+              "chroma": "/home/myuser/.cache/seagoat/fbee39c83bd47a75e2f839"
+            },
             "isRunning": false,
             "host": "127.0.0.1",
             "port": "8081",
@@ -63,17 +71,38 @@ You will receive a response similar to this:
 }
 ```
 
+In this output, you can also see information about where databases/caches
+related to your projects are stored. `globalCache` is the parent folder of
+all the cache directories, and withing each server, you can find an attribute
+called `cacheLocation` which contains the path to the cache directory for
+each different type of cache associated with that project.
+
+If you want to create a configuration file, you can see the path for it
+in the `globalConfigFile` attribute. This depends on your operating system.
+You can also create a configuration file for your project. See
+[the configuration documentation](configuration.md) for more information.
+
 ### Making queries using the API
 
 If you want to build an application using SeaGOAT-server, first you need to
 figure out the address of the server you want to connect to.
+
+To find the address of each SeaGOAT-server running on
+your computer, use `seagoat-server server-info`. See the explanation above.
 
 Once you have the address, you can start making queries to it. For instance,
 this is how you'd make a query using `curl` to the server running on
 `http://localhost:32835`:
 
 ```bash
-curl 'http://localhost:32835/query/example'
+curl -X POST 'http://localhost:34743/lines/query' \
+-H 'Content-Type: application/json' \
+-d '{
+      "query": "your_query_here",
+      "limitClue": "500",
+      "contextAbove": 3,
+      "contextBelow": 3
+    }'
 ```
 
 You will receive a response similar to this one:
@@ -86,7 +115,8 @@ You will receive a response similar to this one:
       "fullPath": "/home/user/repos/SeaGOAT/tests/conftest.py",
       "score": 0.6,
       "blocks": [
-      {
+        {
+          "score": 0.21,
           "lines": [
             {
               "score": 0.21,
@@ -100,8 +130,9 @@ You will receive a response similar to this one:
           "lineTypeCount": {
             "result": 1
           }
-        }
+        },
         {
+          "score": 0.6,
           "lines": [
             {
               "score": 0.6,
@@ -142,8 +173,8 @@ You will receive a response similar to this one:
 
 The response contains the following information:
 
-* `version` - This is the version of SeaGOAT being used
-* `results` - This is an array containing your results
+* `version` - This is the version of SeaGOAT being used.
+* `results` - This is an array containing your results.
 
 Each result inside results has the following data:
 
@@ -158,8 +189,12 @@ Within each block you will find:
   * `score` - Relevance score for this line. See `score` above.
   * `line` - The line number in the file where the result was found.
   * `lineText` - The actual text content of that line.
-  * `resultTypes` - An array indicating all types of result on this line
-    * `"result"` Means that the line is directly relevant to the query
-    * `"context"` Means that the line was added as a context line
+  * `resultTypes` - An array indicating all types of result on this line:
+    * `"result"` Means that the line is directly relevant to the query.
+    * `"context"` Means that the line was added as a context line.
+    * `"bridge"` It is a type of context line that is added within a block
+    rather than around it. It is used to merge code blocks when they are
+    nearly touching.
 * `lineTypeCount` - An object containing a count of all line types within
   the code block. See `resultTypes` for more.
+* `score` - A score for the code block overall.

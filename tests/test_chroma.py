@@ -1,5 +1,5 @@
-# pylint: disable=protected-access
 import copy
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -19,18 +19,8 @@ def normalize_full_paths(data, repo):
 
 
 @pytest.fixture(autouse=True)
-# pylint: disable-next=unused-argument
 def use_real_db(real_chromadb):
     pass
-
-
-def test_requires_fetching_data(repo):
-    seagoat = Engine(repo.working_dir)
-    seagoat.analyze_codebase()
-    my_query = "lightweight markup language"
-    seagoat.query(my_query)
-
-    assert len(seagoat.get_results()) == 0
 
 
 @pytest.mark.asyncio
@@ -38,30 +28,27 @@ async def test_gets_data_using_vector_embeddings(repo, snapshot):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "lightweight markup language"
-    seagoat.query(my_query)
-    await seagoat.fetch()
+    results = await seagoat.query(my_query)
 
     # Tests that results are sorted according to relevance
-    assert seagoat.get_results()[0].path == "file1.md"
+    assert results[0].gitfile.path == "file1.md"
 
     # Tests that results are grouped by file
-    assert len(set(result.path for result in seagoat.get_results())) == len(
-        list(seagoat.get_results())
-    )
+    assert len(set(result.gitfile.path for result in results)) == len(list(results))
 
     # Tests that file lines are included for each result
     assert [
-        normalize_full_paths(result.to_json(my_query), repo)
-        for result in seagoat.get_results()
+        normalize_full_paths(result.to_json(), repo) for result in results
     ] == snapshot
 
 
 def test_allows_fetching_data_synchronously(repo):
     repo.add_file_change_commit(
         file_name="articles.txt",
-        contents="Italian food recipes, spaghetti, pomodoro, pepperoni\n",
+        contents="Italian food recipes, tükörfúrógép, spaghetti, pomodoro, pepperoni\n",
         author=repo.actors["John Doe"],
         commit_message="Add italian food recipes",
+        encoding="utf-8",
     )
     repo.add_file_change_commit(
         file_name="vehicles.txt",
@@ -78,10 +65,9 @@ def test_allows_fetching_data_synchronously(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "tomato pizza"
-    seagoat.query(my_query)
-    seagoat.fetch_sync(limit_clue=33)
+    results = seagoat.query_sync(my_query, limit_clue=33)
 
-    assert seagoat.get_results()[0].path == "articles.txt"
+    assert results[0].gitfile.path == "articles.txt"
 
 
 @pytest.mark.asyncio
@@ -107,10 +93,9 @@ async def test_considers_filename_in_results(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "dish_recipe.txt"
-    seagoat.query(my_query)
-    await seagoat.fetch()
+    results = await seagoat.query(my_query)
 
-    assert seagoat.get_results()[0].path == "cooking_recipes.txt"
+    assert results[0].gitfile.path == "cooking_recipes.txt"
 
 
 @pytest.mark.asyncio
@@ -136,10 +121,9 @@ async def test_considers_commit_messages(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "italian pomodoro pie with slices of cured meat"
-    seagoat.query(my_query)
-    await seagoat.fetch()
+    results = await seagoat.query(my_query)
 
-    assert seagoat.get_results()[0].path == "vehicles_1.txt"
+    assert results[0].gitfile.path == "vehicles_1.txt"
 
 
 @pytest.mark.asyncio
@@ -165,10 +149,9 @@ async def test_truncates_very_long_lines(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "tomato pizza"
-    seagoat.query(my_query)
-    await seagoat.fetch()
+    results = await seagoat.query(my_query)
 
-    assert seagoat.get_results()[0].path == "vehicles.txt"
+    assert results[0].gitfile.path == "vehicles.txt"
 
 
 @pytest.mark.asyncio
@@ -196,11 +179,18 @@ async def test_includes_all_matching_lines_from_line(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "smartphone"
-    seagoat.query(my_query)
-    await seagoat.fetch()
+    results = await seagoat.query(my_query)
 
-    assert seagoat.get_results()[0].path == "devices.txt"
-    assert set(seagoat.get_results()[0].get_lines(my_query)) == {1, 2, 4, 6, 7, 8, 9}
+    assert results[0].gitfile.path == "devices.txt"
+    assert set(results[0].get_lines()) == {
+        1,
+        2,
+        4,
+        6,
+        7,
+        8,
+        9,
+    }
 
 
 @pytest.mark.asyncio
@@ -228,11 +218,10 @@ async def test_exact_matches_have_higher_score(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "apple      iphone 12"
-    seagoat.query(my_query)
-    await seagoat.fetch()
+    results = await seagoat.query(my_query)
 
-    assert seagoat.get_results()[0].path == "devices.txt"
-    assert set(seagoat.get_results()[0].get_lines(my_query)) == {7, 8}
+    assert results[0].gitfile.path == "devices.txt"
+    assert set(results[0].get_lines()) == {7, 8, 12}
 
 
 @pytest.mark.asyncio
@@ -260,10 +249,9 @@ async def test_chunks_are_persisted_between_runs(repo):
         seagoat1, "_add_to_collection", wraps=seagoat1._add_to_collection
     ) as mock_add_to_collection:
         seagoat1.analyze_codebase()
-        seagoat1.query("pomodoro spaghetti")
-        await seagoat1.fetch()
+        results1 = await seagoat1.query("pomodoro spaghetti")
         assert mock_add_to_collection.call_count > 2
-        assert seagoat1.get_results()[0].path == "articles.txt"
+        assert results1[0].gitfile.path == "articles.txt"
         del seagoat1
 
     seagoat2 = Engine(repo.working_dir)
@@ -271,10 +259,9 @@ async def test_chunks_are_persisted_between_runs(repo):
         seagoat2, "_add_to_collection", wraps=seagoat2._add_to_collection
     ) as mock_add_to_collection:
         seagoat2.analyze_codebase()
-        seagoat2.query("pomodoro spaghetti")
-        await seagoat2.fetch()
+        results2 = await seagoat2.query("pomodoro spaghetti")
         assert mock_add_to_collection.call_count == 0
-        assert seagoat2.get_results()[0].path == "articles.txt"
+        assert results2[0].gitfile.path == "articles.txt"
 
 
 @pytest.mark.asyncio
@@ -299,18 +286,128 @@ async def test_respects_limit_in_chromadb(repo):
     seagoat = Engine(repo.working_dir)
     seagoat.analyze_codebase()
     my_query = "apple"
-    seagoat.query(my_query)
-    await seagoat.fetch(limit_clue=5)
+    results = await seagoat.query(my_query, limit_clue=5)
 
     expected_files = {"devices.txt", "devices2.txt"}
-    results_files = set(result.path for result in seagoat.get_results())
+    results_files = set(result.gitfile.path for result in results)
 
     assert expected_files.issubset(results_files)
     result_for_devices_txt = next(
-        (result for result in seagoat.get_results() if result.path == "devices.txt"),
+        (result for result in results if result.gitfile.path == "devices.txt"),
         None,
     )
     if result_for_devices_txt:
-        assert len(result_for_devices_txt.get_lines(my_query)) == 6
+        assert len(result_for_devices_txt.get_lines()) == 6
     else:
         raise AssertionError("File 'devices.txt' not found in results.")
+
+
+@pytest.mark.asyncio
+async def test_does_not_crash_repo_when_files_are_deleted(repo):
+    repo.add_file_change_commit(
+        file_name="cooking_recipes.txt",
+        contents="motorbike, ford, mercedes\n",
+        author=repo.actors["John Doe"],
+        commit_message=".",
+    )
+    seagoat = Engine(repo.working_dir)
+    seagoat.analyze_codebase()
+    my_query = "dish_recipe.txt"
+    await seagoat.query(my_query)
+    (Path(repo.working_dir) / "cooking_recipes.txt").unlink()
+
+    seagoat.analyze_codebase()
+    await seagoat.query(my_query)
+
+
+@pytest.mark.asyncio
+async def test_custom_ignore_patterns(repo, create_config_file):
+    create_config_file(
+        {
+            "server": {"ignorePatterns": ["**/devices2.txt"]},
+        }
+    )
+    repo.add_file_change_commit(
+        file_name="foo/devices2.txt",
+        contents="food from an orchard, but not a banana or pear. It's red",
+        author=repo.actors["John Doe"],
+        commit_message="commit",
+    )
+    repo.add_file_change_commit(
+        file_name="devices.txt",
+        contents="""banana, fruit, red, Macintosh, iPhone
+        """
+        * 6,
+        author=repo.actors["John Doe"],
+        commit_message="Add italian food recipes",
+    )
+    seagoat = Engine(repo.working_dir)
+    seagoat.analyze_codebase()
+    my_query = "apple"
+    results = await seagoat.query(my_query, limit_clue=5)
+
+    results_files = set(result.gitfile.path for result in results)
+
+    assert "foo/devices2.txt" not in results_files
+
+
+@pytest.mark.asyncio
+async def test_user_defined_execution_provider(repo, create_config_file):
+    create_config_file(
+        {
+            "server": {
+                "chroma": {
+                    "embeddingFunction": {
+                        "name": "ONNXMiniLM_L6_V2",
+                        "arguments": {"preferred_providers": ["CPUExecutionProvider"]},
+                    },
+                }
+            }
+        }
+    )
+    seagoat = Engine(repo.working_dir)
+    seagoat.analyze_codebase()
+    my_query = "apple"
+    seagoat.query_sync(my_query)
+
+
+@pytest.mark.asyncio
+async def test_does_not_crash_when_file_lines_are_removed(repo):
+    repo.add_file_change_commit(
+        file_name="devices.txt",
+        contents="""1: Nothing
+        2: Google Pixel 2 Android
+        3:
+        4: Mango juice
+        5: Fried potatoes
+        6: Chicken wings
+        7: Apple iPhone 12
+        8: Pizza slices with pepperoni
+        9: Samsung Galaxy S10
+        10:
+        11:
+
+        13:
+        14:
+        """,
+        author=repo.actors["John Doe"],
+        commit_message="Add italian food recipes",
+    )
+    seagoat = Engine(repo.working_dir)
+    seagoat.analyze_codebase()
+    my_query = "apple      iphone 12"
+    await seagoat.query(my_query)
+    repo.add_file_change_commit(
+        file_name="devices.txt",
+        contents="""1: Nothing
+        2: apple
+        3:
+        4: Mango juice
+        """,
+        author=repo.actors["John Doe"],
+        commit_message="Add italian food recipes",
+    )
+    seagoat.analyze_codebase()
+    results = await seagoat.query(my_query)
+
+    assert results[0].gitfile.path == "devices.txt"

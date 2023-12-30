@@ -1,40 +1,52 @@
 import json
 import logging
 import os
+from pathlib import Path
 
 import click
-from flask import current_app
-from flask import Flask
-from flask import jsonify
-from flask import request
+from flask import Flask, current_app, jsonify, request
 from waitress import serve
 
 from seagoat import __version__
+from seagoat.cache import Cache, get_cache_root
 from seagoat.queue.task_queue import TaskQueue
-from seagoat.utils.server import get_free_port
-from seagoat.utils.server import get_server_info
-from seagoat.utils.server import get_servers_info
-from seagoat.utils.server import is_server_running
-from seagoat.utils.server import remove_server_info
-from seagoat.utils.server import ServerDoesNotExist
-from seagoat.utils.server import update_server_info
+from seagoat.utils.config import GLOBAL_CONFIG_FILE, get_config_values
+from seagoat.utils.server import (
+    ServerDoesNotExist,
+    get_free_port,
+    get_server_info,
+    get_servers_info,
+    is_server_running,
+    stop_server,
+    update_server_info,
+)
 from seagoat.utils.wait import wait_for
+
+
+def get_fallback_value(dictionary, key, fallback_value):
+    if key not in dictionary or dictionary[key] is None:
+        return fallback_value
+
+    return dictionary[key]
 
 
 def create_app(repo_path):
     logging.info("Creating server...")
     app = Flask(__name__)
     app.config["PROPAGATE_EXCEPTIONS"] = True
+    app.debug = True
 
     app.extensions["task_queue"] = TaskQueue(
         repo_path=repo_path, minimum_chunks_to_analyze=0
     )
 
-    @app.route("/query/<query>")
-    def query_codebase(query):
-        limit_clue = request.args.get("limitClue", "500")
-        context_above = request.args.get("contextAbove", 0)
-        context_below = request.args.get("contextBelow", 0)
+    @app.route("/lines/query", methods=["POST"])
+    def query_lines():
+        data = request.json
+        query = get_fallback_value(data, "queryText", "")
+        limit_clue = get_fallback_value(data, "limitClue", "500")
+        context_above = get_fallback_value(data, "contextAbove", 3)
+        context_below = get_fallback_value(data, "contextBelow", 3)
 
         try:
             limit_clue = int(limit_clue)
@@ -80,7 +92,7 @@ def create_app(repo_path):
     return app
 
 
-def start_server(repo_path, custom_port=None):
+def start_server(repo_path: str, custom_port=None):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     app = create_app(repo_path)
     port = custom_port
@@ -88,8 +100,15 @@ def start_server(repo_path, custom_port=None):
     if port is None:
         port = get_free_port()
 
-    new_server_data = {"host": "localhost", "port": port, "pid": os.getpid()}
-    update_server_info(repo_path, new_server_data)
+    update_server_info(
+        repo_path,
+        {
+            "host": "localhost",
+            "port": port,
+            "address": f"http://localhost:{port}",
+            "pid": os.getpid(),
+        },
+    )
     serve(app, host="0.0.0.0", port=port, threads=1)
 
 
@@ -135,6 +154,9 @@ def server():
 @click.option("--port", type=int, help="The port to start the server on", default=None)
 def start(repo_path, port):
     """Starts the server."""
+    config = get_config_values(Path(repo_path))
+    port = port if port is not None else config["server"]["port"]
+
     get_server(repo_path, custom_port=port)
     click.echo("Server running.")
 
@@ -149,7 +171,11 @@ def get_status_data(repo_path):
         pid = server_info.get("pid", None)
 
         if is_server_running(repo_path):
-            status_info = {"isRunning": True, "url": server_address, "pid": pid}
+            status_info = {
+                "isRunning": True,
+                "url": server_address,
+                "pid": pid,
+            }
 
     except ServerDoesNotExist:
         pass
@@ -178,7 +204,7 @@ def status(repo_path, use_json_format):
 def stop(repo_path):
     """Stops the server."""
     try:
-        remove_server_info(repo_path)
+        stop_server(repo_path)
     except ServerDoesNotExist:
         click.echo(
             f"No server information found for {repo_path}. It might not be running or was never started."
@@ -198,6 +224,15 @@ def _server_info():
 
     for normalized_repo_path, info in servers_info.items():
         formatted_servers_info[normalized_repo_path] = {
+            "repoPath": normalized_repo_path,
+            "cacheLocation": {
+                "chroma": str(
+                    Cache("chroma", Path(normalized_repo_path), {}).get_cache_folder(),
+                ),
+                "ripgrep": str(
+                    Cache("ripgrep", Path(normalized_repo_path), {}).get_cache_folder(),
+                ),
+            },
             "isRunning": is_server_running(normalized_repo_path),
             "host": info["host"],
             "port": info["port"],
@@ -207,6 +242,8 @@ def _server_info():
     info = {
         "version": __version__,
         "servers": formatted_servers_info,
+        "globalCache": str(get_cache_root()),
+        "globalConfigFile": str(GLOBAL_CONFIG_FILE),
     }
 
     click.echo(json.dumps(info))
